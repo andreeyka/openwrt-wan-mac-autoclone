@@ -6,11 +6,6 @@ on:
       - main
   pull_request:
   workflow_dispatch:
-    inputs:
-      arch:
-        description: OpenWrt SDK arch tag
-        required: true
-        default: x86_64-24.10.6
 
 jobs:
   sdk-build:
@@ -20,7 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         arch:
-          - ${{ github.event.inputs.arch || 'x86_64-24.10.6' }}
+          - x86_64-24.10.6
+          - x86_64-25.12.3
 
     steps:
       - name: Checkout
