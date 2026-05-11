@@ -1,0 +1,47 @@
+name: OpenWrt SDK Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: OpenWrt SDK arch tag
+        required: true
+        default: x86_64-24.10.6
+
+jobs:
+  sdk-build:
+    name: SDK build (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - ${{ github.event.inputs.arch || 'x86_64-24.10.6' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build packages with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}
+          PACKAGES: wan-mac-autoclone luci-app-wan-mac-autoclone
+          BUILD_LOG: 1
+          V: s
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-packages-${{ matrix.arch }}
+          path: |
+            bin/packages/**/*.ipk
+            bin/packages/**/*.apk
+            logs/**
+          if-no-files-found: error
