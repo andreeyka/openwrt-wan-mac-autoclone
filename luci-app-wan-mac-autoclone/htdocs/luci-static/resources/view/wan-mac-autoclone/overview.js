@@ -90,12 +90,13 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			uci.load('wan-mac-autoclone'),
+			uci.load('network'),
 			callStatus().catch(function() { return {}; })
 		]);
 	},
 
 	render: function(data) {
-		var status = data[1] || {};
+		var status = data[2] || {};
 		var m, s, o;
 
 		m = new form.Map('wan-mac-autoclone', _('WAN MAC Autoclone'),
@@ -150,10 +151,9 @@ return view.extend({
 		o.value('boot', _('Capture a new MAC on every boot'));
 		o.default = 'once';
 
-		o = s.option(form.Value, 'wan_iface', _('WAN interface'),
+		o = s.option(form.ListValue, 'wan_iface', _('WAN interface'),
 			_('Name of the /etc/config/network interface to clone onto.'));
 		o.default = 'wan';
-		// Try to autocomplete from existing interfaces.
 		uci.sections('network', 'interface', function(sec) {
 			if (sec['.name']) o.value(sec['.name']);
 		});
