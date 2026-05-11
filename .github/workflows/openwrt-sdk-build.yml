@@ -14,9 +14,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch:
-          - x86_64-24.10.6
-          - x86_64-25.12.3
+        include:
+          - arch: x86_64-24.10.6
+            luci_branch: openwrt-24.10
+          - arch: x86_64-25.12.3
+            luci_branch: openwrt-25.12
 
     steps:
       - name: Checkout
@@ -28,6 +30,8 @@ jobs:
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}
+          NO_DEFAULT_FEEDS: 1
+          EXTRA_FEEDS: src-git|luci|https://github.com/openwrt/luci.git;${{ matrix.luci_branch }}
           PACKAGES: wan-mac-autoclone luci-app-wan-mac-autoclone
           BUILD_LOG: 1
           V: s
