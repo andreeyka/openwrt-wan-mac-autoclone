@@ -1,0 +1,37 @@
+
+config autoclone 'global'
+	# Master switch
+	option enabled '1'
+
+	# Capture mode: 'dhcp' (recommended) or 'arp'
+	#   dhcp - hook on first DHCP lease in LAN, take that client's MAC
+	#   arp  - poll ARP table on lan_bridge, take first non-router neighbour
+	option mode 'dhcp'
+
+	# Startup policy: 'once' (recommended) or 'boot'
+	#   once - capture only when no locked MAC is saved in this config
+	#   boot - clear the saved lock on every boot and capture again
+	option policy 'once'
+
+	# Name of the /etc/config/network interface to clone MAC onto
+	option wan_iface 'wan'
+
+	# Bridge / device that exposes the LAN side (used only in arp mode)
+	option lan_bridge 'br-lan'
+
+	# ARP poll interval in seconds (arp mode only)
+	option poll_interval '15'
+
+	# Skip these MACs (regex, case-insensitive). Useful to ignore the router
+	# itself or specific devices. Multiple lines allowed.
+	list ignore_mac '^00:00:00:00:00:00$'
+	list ignore_mac '^ff:ff:ff:ff:ff:ff$'
+
+config state 'state'
+	# Managed by /usr/sbin/wan-mac-autoclone. Do not edit by hand.
+	option locked '0'
+	option locked_mac ''
+	option locked_source ''
+	option locked_at ''
+	# Name of the 'config device' section in /etc/config/network we wrote to
+	option managed_device_section ''

@@ -1,0 +1,12 @@
+.DS_Store
+*.ipk
+*.apk
+*.o
+*.so
+*.swp
+*~
+/bin/
+/build_dir/
+/dl/
+/staging_dir/
+/tmp/

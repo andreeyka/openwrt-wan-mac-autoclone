@@ -1,0 +1,17 @@
+{
+	"luci-app-wan-mac-autoclone": {
+		"description": "Grant UCI and ubus access to the WAN MAC Autoclone app",
+		"read": {
+			"uci": [ "wan-mac-autoclone", "network" ],
+			"ubus": {
+				"wan-mac-autoclone": [ "status" ]
+			}
+		},
+		"write": {
+			"uci": [ "wan-mac-autoclone" ],
+			"ubus": {
+				"wan-mac-autoclone": [ "reclone", "reset" ]
+			}
+		}
+	}
+}

@@ -1,0 +1,24 @@
+#!/bin/sh
+# /etc/hotplug.d/dhcp/30-wan-mac-autoclone
+# Triggered by dnsmasq on every DHCP add/update/del event.
+# When mode=dhcp and we are not yet locked, capture this lease's MAC.
+
+[ "$ACTION" = "add" ] || [ "$ACTION" = "update" ] || exit 0
+[ -n "$MACADDR" ] || exit 0
+
+# Quick guard: skip immediately if the package is disabled or already locked,
+# to keep the dnsmasq hot-path cheap.
+. /lib/functions.sh
+config_load wan-mac-autoclone
+enabled=$(uci -q get wan-mac-autoclone.global.enabled || echo 1)
+mode=$(uci -q get wan-mac-autoclone.global.mode || echo dhcp)
+locked=$(uci -q get wan-mac-autoclone.state.locked || echo 0)
+
+[ "$enabled" = "1" ] || exit 0
+[ "$mode" = "dhcp" ] || exit 0
+[ "$locked" = "1" ] && exit 0
+
+# Apply via the main script so all validation / ignore-lists / device resolution
+# logic live in one place.
+/usr/sbin/wan-mac-autoclone apply "$MACADDR" "dhcp:${HOSTNAME:-$IPADDR}" \
+	>/dev/null 2>&1 &

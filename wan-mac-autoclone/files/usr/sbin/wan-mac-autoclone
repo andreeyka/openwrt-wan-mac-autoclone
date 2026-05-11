@@ -1,0 +1,419 @@
+#!/bin/sh
+# wan-mac-autoclone - automatically clone a LAN client's MAC to the WAN interface
+# Copyright (C) 2026  wan-mac-autoclone contributors
+# Licensed under the GNU General Public License v2.0 or later.
+
+set -u
+
+. /lib/functions.sh
+
+PROG="wan-mac-autoclone"
+CFG="wan-mac-autoclone"
+LOG_TAG="$PROG"
+
+log() {
+	logger -t "$LOG_TAG" -p daemon.info -- "$*"
+	[ -t 1 ] && printf '%s\n' "$*" >&2
+}
+
+warn() {
+	logger -t "$LOG_TAG" -p daemon.warn -- "$*"
+	printf '%s\n' "$*" >&2
+}
+
+die() {
+	logger -t "$LOG_TAG" -p daemon.err -- "$*"
+	printf '%s\n' "$*" >&2
+	exit 1
+}
+
+##############################################################################
+# Config helpers
+##############################################################################
+
+load_config() {
+	config_load "$CFG"
+
+	config_get enabled       global enabled       '1'
+	config_get mode          global mode          'dhcp'
+	config_get policy        global policy        'once'
+	config_get wan_iface     global wan_iface     'wan'
+	config_get lan_bridge    global lan_bridge    'br-lan'
+	config_get poll_interval global poll_interval '15'
+
+	config_get locked          state locked          '0'
+	config_get locked_mac      state locked_mac      ''
+	config_get locked_source   state locked_source   ''
+	config_get locked_at       state locked_at       ''
+	config_get managed_device  state managed_device_section ''
+
+	ignore_list=""
+	config_list_foreach global ignore_mac _collect_ignore
+}
+
+_collect_ignore() {
+	ignore_list="$ignore_list
+$1"
+}
+
+state_set() {
+	uci -q set "$CFG.state.$1=$2"
+}
+
+state_commit() {
+	uci -q commit "$CFG"
+}
+
+##############################################################################
+# MAC validation / normalisation
+##############################################################################
+
+is_valid_mac() {
+	# 6 hex pairs separated by ':'. Reject zero/broadcast outright.
+	printf '%s' "$1" | grep -Eiq '^([0-9a-f]{2}:){5}[0-9a-f]{2}$' || return 1
+	case "$1" in
+		00:00:00:00:00:00|ff:ff:ff:ff:ff:ff) return 1 ;;
+	esac
+	# Reject multicast (lowest bit of first octet set)
+	first_byte=$(printf '%s' "$1" | cut -d: -f1)
+	# shellcheck disable=SC2003
+	dec=$(printf '%d' "0x$first_byte" 2>/dev/null) || return 1
+	[ $((dec & 1)) -eq 0 ] || return 1
+	return 0
+}
+
+normalise_mac() {
+	# Lowercase, no whitespace.
+	printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d '[:space:]'
+}
+
+is_ignored_mac() {
+	local mac="$1" pattern
+	[ -z "$ignore_list" ] && return 1
+	while IFS= read -r pattern; do
+		[ -z "$pattern" ] && continue
+		if printf '%s' "$mac" | grep -Eiq "$pattern"; then
+			return 0
+		fi
+	done <<-EOF
+	$ignore_list
+	EOF
+	return 1
+}
+
+json_escape() {
+	printf '%s' "$1" | sed \
+		-e 's/\\/\\\\/g' \
+		-e 's/"/\\"/g' \
+		-e 's/	/\\t/g'
+}
+
+json_string() {
+	printf '"%s"' "$(json_escape "$1")"
+}
+
+##############################################################################
+# Network: resolve WAN device, write macaddr to /etc/config/network
+##############################################################################
+
+get_wan_device_name() {
+	# Modern: network.wan.device. Legacy: network.wan.ifname.
+	local dev
+	dev=$(uci -q get "network.$wan_iface.device" 2>/dev/null) || true
+	if [ -z "$dev" ]; then
+		dev=$(uci -q get "network.$wan_iface.ifname" 2>/dev/null) || true
+	fi
+	# Fall back to runtime: ubus network.interface.<iface> status -> l3_device
+	if [ -z "$dev" ] && command -v ubus >/dev/null 2>&1; then
+		dev=$(ubus call "network.interface.$wan_iface" status 2>/dev/null | \
+			sed -n 's/.*"l3_device": "\([^"]*\)".*/\1/p' | head -n1)
+	fi
+	printf '%s' "$dev"
+}
+
+find_or_create_device_section() {
+	local dev_name="$1"
+	local found=""
+
+	# Try to find an existing `config device` whose `name` equals $dev_name.
+	# We have to walk all device sections because anonymous ones get random IDs.
+	_match() {
+		local sec="$1" n
+		n=$(uci -q get "network.$sec.name" 2>/dev/null) || true
+		if [ "$n" = "$dev_name" ]; then
+			found="$sec"
+		fi
+	}
+	config_load network
+	config_foreach _match device
+	# Re-load our own config afterwards to avoid global-state pollution.
+	config_load "$CFG"
+
+	if [ -n "$found" ]; then
+		printf '%s' "$found"
+		return 0
+	fi
+
+	# Create a new anonymous device section.
+	local new_sec
+	new_sec=$(uci add network device) || return 1
+	uci -q set "network.$new_sec.name=$dev_name"
+	printf '%s' "$new_sec"
+}
+
+write_macaddr() {
+	local mac="$1"
+	local dev_name section
+
+	dev_name=$(get_wan_device_name)
+	[ -n "$dev_name" ] || die "cannot resolve device name for interface '$wan_iface'"
+
+	section=$(find_or_create_device_section "$dev_name") || die "uci add network.device failed"
+	uci -q set "network.$section.macaddr=$mac"
+	uci -q commit network
+
+	state_set managed_device_section "$section"
+	state_commit
+
+	log "applied macaddr $mac to network.$section (device $dev_name)"
+
+	# Bounce the WAN to make it effective. ifup is enough on modern netifd.
+	ifup "$wan_iface" 2>/dev/null || /etc/init.d/network reload 2>/dev/null || true
+}
+
+clear_macaddr() {
+	local section="$managed_device"
+	if [ -n "$section" ] && uci -q get "network.$section" >/dev/null 2>&1; then
+		uci -q delete "network.$section.macaddr"
+		uci -q commit network
+		log "cleared macaddr on network.$section"
+		ifup "$wan_iface" 2>/dev/null || /etc/init.d/network reload 2>/dev/null || true
+	fi
+	state_set managed_device_section ""
+	state_commit
+}
+
+##############################################################################
+# Candidate discovery
+##############################################################################
+
+# Pick a candidate MAC from the most recent DHCP lease in /tmp/dhcp.leases.
+# Format: <expiry-epoch> <mac> <ip> <hostname> <client-id>
+candidate_from_dhcp() {
+	local leases=/tmp/dhcp.leases
+	[ -f "$leases" ] || return 1
+
+	# Newest lease first.
+	sort -nr "$leases" 2>/dev/null | while read -r _exp mac ip host _rest; do
+		mac=$(normalise_mac "$mac")
+		is_valid_mac "$mac" || continue
+		if is_ignored_mac "$mac"; then
+			continue
+		fi
+		printf '%s\t%s\n' "$mac" "dhcp:${host:-$ip}"
+		return 0
+	done
+}
+
+# Pick a candidate MAC from the ARP/neigh table on $lan_bridge.
+# We prefer REACHABLE entries; if none, fall back to STALE.
+candidate_from_arp() {
+	local out mac
+	out=$(ip -4 neigh show dev "$lan_bridge" 2>/dev/null) || return 1
+	[ -n "$out" ] || return 1
+
+	for state in REACHABLE STALE DELAY PROBE PERMANENT; do
+		mac=$(printf '%s\n' "$out" | awk -v s="$state" '
+			$0 ~ s {
+				for (i = 1; i <= NF; i++)
+					if ($i == "lladdr") { print $(i+1); exit }
+			}')
+		mac=$(normalise_mac "$mac")
+		if is_valid_mac "$mac" && ! is_ignored_mac "$mac"; then
+			printf '%s\t%s\n' "$mac" "arp:$state"
+			return 0
+		fi
+	done
+	return 1
+}
+
+candidate_mac() {
+	case "$mode" in
+		dhcp) candidate_from_dhcp ;;
+		arp)  candidate_from_arp  ;;
+		*)    die "unknown mode '$mode' (use 'dhcp' or 'arp')" ;;
+	esac
+}
+
+##############################################################################
+# Top-level actions
+##############################################################################
+
+cmd_apply() {
+	# Usage: apply <mac> [source]
+	local mac source
+	mac=$(normalise_mac "${1:-}")
+	source="${2:-manual}"
+	is_valid_mac "$mac" || die "invalid MAC: '$mac'"
+
+	if [ "$locked" = "1" ] && [ "$locked_mac" = "$mac" ]; then
+		log "already locked to $mac, nothing to do"
+		return 0
+	fi
+
+	write_macaddr "$mac"
+	state_set locked '1'
+	state_set locked_mac "$mac"
+	state_set locked_source "$source"
+	state_set locked_at "$(date +%s)"
+	state_commit
+	log "locked to $mac (source: $source)"
+}
+
+cmd_tick() {
+	[ "$enabled" = "1" ] || { log "disabled, skipping tick"; return 0; }
+	if [ "$locked" = "1" ]; then
+		log "already locked to $locked_mac, ignoring tick"
+		return 0
+	fi
+	local pair mac source
+	pair=$(candidate_mac) || { log "no candidate MAC available yet"; return 1; }
+	mac=$(printf '%s' "$pair" | cut -f1)
+	source=$(printf '%s' "$pair" | cut -f2)
+	[ -n "$mac" ] || { log "no candidate MAC available yet"; return 1; }
+	cmd_apply "$mac" "$source"
+}
+
+cmd_reclone() {
+	# Release the lock first, then try to capture afresh.
+	state_set locked '0'
+	state_set locked_mac ''
+	state_set locked_source ''
+	state_set locked_at ''
+	state_commit
+	# Reload locals
+	load_config
+	cmd_tick
+}
+
+cmd_boot() {
+	[ "$enabled" = "1" ] || return 0
+	case "$policy" in
+		once)
+			cmd_init
+			;;
+		boot)
+			clear_macaddr
+			state_set locked '0'
+			state_set locked_mac ''
+			state_set locked_source ''
+			state_set locked_at ''
+			state_commit
+			log "boot policy: cleared saved MAC lock for fresh capture"
+			;;
+		*)
+			die "unknown policy '$policy' (use 'once' or 'boot')"
+			;;
+	esac
+}
+
+cmd_reset() {
+	clear_macaddr
+	state_set locked '0'
+	state_set locked_mac ''
+	state_set locked_source ''
+	state_set locked_at ''
+	state_commit
+	log "reset: lock cleared, WAN macaddr override removed"
+}
+
+cmd_status() {
+	# JSON output, friendly to LuCI / ubus consumers.
+	local dev
+	dev=$(get_wan_device_name)
+	cat <<-EOF
+	{
+	 "enabled": $([ "$enabled" = "1" ] && echo true || echo false),
+	 "mode": $(json_string "$mode"),
+	 "policy": $(json_string "$policy"),
+	 "wan_iface": $(json_string "$wan_iface"),
+	 "wan_device": $(json_string "$dev"),
+	 "lan_bridge": $(json_string "$lan_bridge"),
+	 "locked": $([ "$locked" = "1" ] && echo true || echo false),
+	 "locked_mac": $(json_string "$locked_mac"),
+	 "locked_source": $(json_string "$locked_source"),
+	 "locked_at": ${locked_at:-0},
+	 "managed_device_section": $(json_string "$managed_device")
+	}
+	EOF
+}
+
+cmd_init() {
+	# Called from init.d at boot. Make sure that if we already have a lock,
+	# the macaddr is still present in /etc/config/network (e.g. survives sysupgrade).
+	[ "$enabled" = "1" ] || return 0
+	if [ "$locked" = "1" ] && [ -n "$locked_mac" ]; then
+		local dev_name section current
+		dev_name=$(get_wan_device_name)
+		[ -n "$dev_name" ] || return 1
+		section=$(find_or_create_device_section "$dev_name") || return 1
+		current=$(uci -q get "network.$section.macaddr" 2>/dev/null) || true
+		if [ "$current" != "$locked_mac" ]; then
+			log "re-applying locked macaddr $locked_mac after boot"
+			uci -q set "network.$section.macaddr=$locked_mac"
+			uci -q commit network
+			state_set managed_device_section "$section"
+			state_commit
+		fi
+	fi
+}
+
+cmd_poll() {
+	# ARP-mode poller, runs as procd service.
+	[ "$mode" = "arp" ] || { log "poll requested but mode=$mode, exiting"; return 0; }
+	while :; do
+		load_config
+		[ "$enabled" = "1" ] || { sleep "$poll_interval"; continue; }
+		[ "$locked" = "1" ] && {
+			log "locked, ARP poller exiting"
+			return 0
+		}
+		cmd_tick && return 0
+		sleep "$poll_interval"
+	done
+}
+
+##############################################################################
+# Entry point
+##############################################################################
+
+load_config
+
+case "${1:-status}" in
+	apply)    shift; cmd_apply   "$@" ;;
+	tick)     cmd_tick    ;;
+	reclone)  cmd_reclone ;;
+	reset)    cmd_reset   ;;
+	status)   cmd_status  ;;
+	boot)     cmd_boot    ;;
+	init)     cmd_init    ;;
+	poll)     cmd_poll    ;;
+	help|-h|--help)
+		cat <<-EOF
+		Usage: $PROG <command> [args]
+
+		Commands:
+		  apply <mac> [source]   Set MAC on WAN and lock state to it.
+		  tick                   Pick a candidate MAC (per mode) and apply if unlocked.
+		  reclone                Clear lock, then run tick.
+		  reset                  Clear lock AND remove macaddr override from network.
+		  status                 Print current state as JSON.
+		  boot                   Apply startup policy (called by init.d).
+		  init                   Re-apply locked MAC without evaluating startup policy.
+		  poll                   ARP-mode poll loop (procd service).
+		EOF
+		;;
+	*)
+		die "unknown command '$1' (try '$PROG help')"
+		;;
+esac

@@ -1,0 +1,14 @@
+{
+	"admin/network/wan-mac-autoclone": {
+		"title": "MAC Autoclone",
+		"order": 75,
+		"action": {
+			"type": "view",
+			"path": "wan-mac-autoclone/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-wan-mac-autoclone" ],
+			"uci": { "wan-mac-autoclone": true }
+		}
+	}
+}

@@ -1,0 +1,53 @@
+#!/bin/sh
+# rpcd plugin for wan-mac-autoclone. Exposes ubus methods used by the LuCI app.
+
+. /usr/share/libubox/jshn.sh
+
+PROG=/usr/sbin/wan-mac-autoclone
+
+call_action() {
+	local cmd="$1" log
+	log="/tmp/wan-mac-autoclone.$$.$cmd.log"
+	if "$PROG" "$cmd" >"$log" 2>&1; then
+		rm -f "$log"
+		json_init
+		json_add_boolean ok 1
+		json_dump
+	else
+		json_init
+		json_add_boolean ok 0
+		json_add_string error "$(tail -n 5 "$log" 2>/dev/null)"
+		json_dump
+		rm -f "$log"
+	fi
+}
+
+case "$1" in
+	list)
+		json_init
+		json_add_object "status";  json_close_object
+		json_add_object "reclone"; json_close_object
+		json_add_object "reset";   json_close_object
+		json_dump
+		;;
+	call)
+		case "$2" in
+			status)
+				# /usr/sbin/wan-mac-autoclone status already emits JSON.
+				"$PROG" status
+				;;
+			reclone)
+				call_action reclone
+				;;
+			reset)
+				call_action reset
+				;;
+			*)
+				json_init
+				json_add_boolean ok 0
+				json_add_string error "unknown method"
+				json_dump
+				;;
+		esac
+		;;
+esac
