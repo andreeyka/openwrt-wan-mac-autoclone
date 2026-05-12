@@ -6,13 +6,15 @@
 PROG=/usr/sbin/wan-mac-autoclone
 
 call_action() {
-	local cmd="$1" log
+	local cmd="$1" log msg
 	log="/tmp/wan-mac-autoclone.$$.$cmd.log"
 	if "$PROG" "$cmd" >"$log" 2>&1; then
-		rm -f "$log"
+		msg=$(tail -n 1 "$log" 2>/dev/null)
 		json_init
 		json_add_boolean ok 1
+		json_add_string message "$msg"
 		json_dump
+		rm -f "$log"
 	else
 		json_init
 		json_add_boolean ok 0

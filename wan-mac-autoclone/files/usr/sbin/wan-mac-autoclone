@@ -11,7 +11,7 @@ LOG_TAG="$PROG"
 
 log() {
 	logger -t "$LOG_TAG" -p daemon.info -- "$*"
-	[ -t 1 ] && printf '%s\n' "$*" >&2
+	printf '%s\n' "$*" >&2
 }
 
 warn() {
@@ -290,7 +290,9 @@ cmd_reclone() {
 	state_commit
 	# Reload locals
 	load_config
-	cmd_tick
+	# Clearing the lock is the user-visible operation and always succeeds;
+	# an empty candidate just means we wait for the next DHCP/ARP event.
+	cmd_tick || true
 }
 
 cmd_boot() {

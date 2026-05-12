@@ -76,13 +76,16 @@ function runAction(method, label) {
 	return method().then(function(res) {
 		ui.hideModal();
 		if (res && res.ok) {
-			ui.addNotification(null, E('p', _('%s finished.').format(label)), 'info');
+			var msg = (res.message && res.message.length > 0)
+				? res.message
+				: _('%s finished.').format(label);
+			ui.addNotification(null, E('p', msg), 'info');
 		} else {
-			var msg = (res && res.error) ? res.error : _('Command failed.');
-			ui.addNotification(null, E('p', msg), 'danger');
+			var err = (res && res.error) ? res.error : _('Command failed.');
+			ui.addNotification(null, E('p', err), 'danger');
 		}
 		// Refresh the page to pick up new status.
-		window.setTimeout(function() { location.reload(); }, 800);
+		window.setTimeout(function() { location.reload(); }, 1500);
 	}).catch(function(err) {
 		ui.hideModal();
 		ui.addNotification(null, E('p', '%s'.format(err)), 'danger');
