@@ -3,8 +3,6 @@
 # Copyright (C) 2026  wan-mac-autoclone contributors
 # Licensed under the GNU General Public License v2.0 or later.
 
-set -u
-
 . /lib/functions.sh
 
 PROG="wan-mac-autoclone"
@@ -131,30 +129,29 @@ get_wan_device_name() {
 	printf '%s' "$dev"
 }
 
-find_or_create_device_section() {
+find_device_section() {
 	local dev_name="$1"
 	local found=""
 
-	# Try to find an existing `config device` whose `name` equals $dev_name.
-	# We have to walk all device sections because anonymous ones get random IDs.
-	_match() {
+	_match_dev() {
 		local sec="$1" n
 		n=$(uci -q get "network.$sec.name" 2>/dev/null) || true
-		if [ "$n" = "$dev_name" ]; then
-			found="$sec"
-		fi
+		[ "$n" = "$dev_name" ] && found="$sec"
 	}
 	config_load network
-	config_foreach _match device
-	# Re-load our own config afterwards to avoid global-state pollution.
+	config_foreach _match_dev device
 	config_load "$CFG"
+	printf '%s' "$found"
+}
 
-	if [ -n "$found" ]; then
-		printf '%s' "$found"
+find_or_create_device_section() {
+	local dev_name="$1" section
+	section=$(find_device_section "$dev_name")
+	if [ -n "$section" ]; then
+		printf '%s' "$section"
 		return 0
 	fi
 
-	# Create a new anonymous device section.
 	local new_sec
 	new_sec=$(uci add network device) || return 1
 	uci -q set "network.$new_sec.name=$dev_name"
@@ -277,10 +274,10 @@ cmd_tick() {
 		return 0
 	fi
 	local pair mac source
-	pair=$(candidate_mac) || { log "no candidate MAC available yet"; return 1; }
+	pair=$(candidate_mac) || { warn "no candidate MAC found (mode=$mode); ensure a LAN client has a DHCP lease or is in the ARP table"; return 1; }
 	mac=$(printf '%s' "$pair" | cut -f1)
 	source=$(printf '%s' "$pair" | cut -f2)
-	[ -n "$mac" ] || { log "no candidate MAC available yet"; return 1; }
+	[ -n "$mac" ] || { warn "no candidate MAC found (mode=$mode); ensure a LAN client has a DHCP lease or is in the ARP table"; return 1; }
 	cmd_apply "$mac" "$source"
 }
 
@@ -325,6 +322,44 @@ cmd_reset() {
 	state_set locked_at ''
 	state_commit
 	log "reset: lock cleared, WAN macaddr override removed"
+}
+
+cmd_adopt() {
+	# Lock the package state to whatever macaddr is currently configured on the
+	# WAN device. Does NOT change /etc/config/network — useful when a manual
+	# MAC clone was set up before installing the package.
+	[ "$enabled" = "1" ] || { warn "wan-mac-autoclone is disabled (enabled=0)"; return 1; }
+
+	local dev_name section current
+	dev_name=$(get_wan_device_name)
+	[ -n "$dev_name" ] || die "cannot resolve device name for interface '$wan_iface'"
+
+	section=$(find_device_section "$dev_name")
+	if [ -z "$section" ]; then
+		warn "nothing to adopt: no 'config device' section for $dev_name in /etc/config/network"
+		return 1
+	fi
+
+	current=$(uci -q get "network.$section.macaddr" 2>/dev/null) || true
+	current=$(normalise_mac "$current")
+
+	if [ -z "$current" ]; then
+		warn "nothing to adopt: network.$section has no macaddr set"
+		return 1
+	fi
+
+	if ! is_valid_mac "$current"; then
+		warn "current macaddr '$current' on network.$section is not a valid unicast MAC"
+		return 1
+	fi
+
+	state_set locked '1'
+	state_set locked_mac "$current"
+	state_set locked_source 'adopt'
+	state_set locked_at "$(date +%s)"
+	state_set managed_device_section "$section"
+	state_commit
+	log "adopted existing macaddr $current on network.$section (device $dev_name)"
 }
 
 cmd_status() {
@@ -394,6 +429,7 @@ case "${1:-status}" in
 	tick)     cmd_tick    ;;
 	reclone)  cmd_reclone ;;
 	reset)    cmd_reset   ;;
+	adopt)    cmd_adopt   ;;
 	status)   cmd_status  ;;
 	boot)     cmd_boot    ;;
 	init)     cmd_init    ;;
@@ -407,6 +443,7 @@ case "${1:-status}" in
 		  tick                   Pick a candidate MAC (per mode) and apply if unlocked.
 		  reclone                Clear lock, then run tick.
 		  reset                  Clear lock AND remove macaddr override from network.
+		  adopt                  Lock state onto the macaddr already set on the WAN device.
 		  status                 Print current state as JSON.
 		  boot                   Apply startup policy (called by init.d).
 		  init                   Re-apply locked MAC without evaluating startup policy.

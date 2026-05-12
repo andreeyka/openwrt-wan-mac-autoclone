@@ -22,14 +22,17 @@ var callStatus  = rpc.declare({
 
 var callReclone = rpc.declare({
 	object: 'wan-mac-autoclone',
-	method: 'reclone',
-	expect: { ok: false }
+	method: 'reclone'
 });
 
 var callReset   = rpc.declare({
 	object: 'wan-mac-autoclone',
-	method: 'reset',
-	expect: { ok: false }
+	method: 'reset'
+});
+
+var callAdopt   = rpc.declare({
+	object: 'wan-mac-autoclone',
+	method: 'adopt'
 });
 
 function fmtTimestamp(ts) {
@@ -116,6 +119,14 @@ return view.extend({
 							return runAction(callReclone, _('Re-clone'));
 						})
 					}, _('Re-clone now')),
+					' ',
+					E('button', {
+						'class': 'btn cbi-button cbi-button-action',
+						'title': _('Lock state to whatever macaddr is already configured on the WAN device. Does not change the macaddr itself.'),
+						'click': ui.createHandlerFn(this, function() {
+							return runAction(callAdopt, _('Adopt'));
+						})
+					}, _('Adopt current MAC')),
 					' ',
 					E('button', {
 						'class': 'btn cbi-button cbi-button-negative',

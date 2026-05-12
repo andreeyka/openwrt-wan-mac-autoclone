@@ -131,6 +131,9 @@ Commands:
   tick                   Pick a candidate MAC (per mode) and apply if unlocked.
   reclone                Clear lock, then run tick.
   reset                  Clear lock AND remove macaddr override from network.
+  adopt                  Lock state onto the macaddr already set on the WAN
+                         device. Useful when a manual MAC clone was set up
+                         before the package was installed.
   status                 Print current state as JSON.
   boot                   Apply startup policy (called by init.d).
   init                   Re-apply locked MAC without evaluating startup policy.
@@ -176,6 +179,7 @@ clone, it is preserved across reboots, `sysupgrade -c`, and config reverts.
 | `wan-mac-autoclone status` | Returns current state as a JSON object. |
 | `wan-mac-autoclone reclone` | Clears the lock and runs a fresh capture. |
 | `wan-mac-autoclone reset` | Clears the lock and removes the macaddr override. |
+| `wan-mac-autoclone adopt` | Locks state onto the macaddr already configured on the WAN device, without overwriting it. |
 
 Try them with `ubus`:
 
