@@ -5,7 +5,9 @@ interface of an OpenWrt router, then locks it. Useful when your ISP binds the
 uplink to a specific MAC and you move the router between sites — no more
 clicking "Override MAC" by hand after every relocation.
 
-Tested on OpenWrt 23.05 / 24.10 / SNAPSHOT (DSA).
+Tested on OpenWrt 24.10 (DSA). The packages are `PKGARCH:=all`, so the same
+`.ipk` works on any target — 23.05 and 25.x should be fine, but only 24.10 is
+exercised on real hardware.
 
 ---
 
@@ -21,6 +23,9 @@ Tested on OpenWrt 23.05 / 24.10 / SNAPSHOT (DSA).
 4. Moving the router to a new uplink? Run `wan-mac-autoclone reset` or click
    "Reset lock" in LuCI. The next time a LAN client connects, its MAC will be
    captured.
+5. Already have a manual MAC clone configured? Run `wan-mac-autoclone adopt`
+   (or click "Adopt current MAC" in LuCI) to let the package take ownership of
+   the existing `macaddr` without rewriting it.
 
 Two capture modes, switchable via UCI or LuCI:
 
@@ -44,8 +49,8 @@ This repo ships two opkg packages:
 
 * **`wan-mac-autoclone`** — the daemon, hotplug hook, uci config and CLI.
 * **`luci-app-wan-mac-autoclone`** — JS-based LuCI view at
-  *Network → MAC Autoclone* with live status, settings form and re-clone /
-  reset buttons.
+  *Network → MAC Autoclone* with live status, settings form and
+  re-clone / adopt / reset buttons.
 
 The LuCI app is optional. The base package is fully usable from the shell.
 
@@ -53,21 +58,28 @@ The LuCI app is optional. The base package is fully usable from the shell.
 
 ## Install
 
-### Option A — quick install of pre-built ipks
+### Option A — download a release from GitHub (recommended)
+
+Each tagged release publishes both packages as attached `.ipk` files. On the
+router:
 
 ```sh
-# On the router
-opkg update
+V=0.2.0
+cd /tmp
+wget https://github.com/<owner>/openwrt-wan-mac-autoclone/releases/download/v${V}/wan-mac-autoclone_${V}-1_all.ipk
+wget https://github.com/<owner>/openwrt-wan-mac-autoclone/releases/download/v${V}/luci-app-wan-mac-autoclone_${V}-1_all.ipk
 opkg install ./wan-mac-autoclone_*.ipk ./luci-app-wan-mac-autoclone_*.ipk
 # Apply LuCI ACLs immediately so the new menu shows up:
-/etc/init.d/rpcd reload
+/etc/init.d/rpcd restart
 ```
+
+Latest release: see <https://github.com/<owner>/openwrt-wan-mac-autoclone/releases/latest>.
 
 ### Option B — build from source against an OpenWrt feed
 
 ```sh
 # In your OpenWrt buildroot
-git clone https://github.com/<you>/openwrt-wan-mac-autoclone.git \
+git clone https://github.com/<owner>/openwrt-wan-mac-autoclone.git \
     package/wan-mac-autoclone
 # wan-mac-autoclone has both Makefiles inside; the feeds index will pick
 # them up if you symlink the subdirs into your feeds/<your-feed>:
@@ -187,24 +199,8 @@ Try them with `ubus`:
 ubus call wan-mac-autoclone status
 ubus call wan-mac-autoclone reclone
 ubus call wan-mac-autoclone reset
+ubus call wan-mac-autoclone adopt
 ```
-
----
-
-## Create the GitHub repository
-
-From this project directory:
-
-```sh
-git add .
-git commit -m "feat: add OpenWrt WAN MAC autoclone packages"
-gh repo create openwrt-wan-mac-autoclone --public --source=. --remote=origin --push
-```
-
-For a private repository, replace `--public` with `--private`.
-
-After publishing, update the clone URL in this README if your GitHub owner/name
-differs from `openwrt-wan-mac-autoclone`.
 
 ---
 
@@ -220,4 +216,4 @@ logread -f -e wan-mac-autoclone
 
 ## License
 
-GPL-2.0-or-later. See `LICENSE`.
+MIT. See `LICENSE`.

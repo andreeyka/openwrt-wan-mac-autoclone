@@ -4,9 +4,9 @@ PKG_NAME:=wan-mac-autoclone
 PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
 
-PKG_LICENSE:=GPL-2.0-or-later
+PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
-PKG_MAINTAINER:=wan-mac-autoclone contributors
+PKG_MAINTAINER:=Andrey <andrey@skzd.ru>
 
 include $(INCLUDE_DIR)/package.mk
 
