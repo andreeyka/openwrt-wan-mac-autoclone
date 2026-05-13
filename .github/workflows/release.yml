@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build .ipk and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive bare version (strip leading 'v')
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build packages with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: x86_64-24.10.6
+          NO_DEFAULT_FEEDS: 1
+          EXTRA_FEEDS: src-git|luci|https://github.com/openwrt/luci.git;openwrt-24.10
+          PACKAGES: wan-mac-autoclone luci-app-wan-mac-autoclone
+          BUILD_LOG: 1
+          V: s
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release-assets
+          find bin/packages -name '*.ipk' -exec cp -v {} release-assets/ \;
+          echo "--- assets ---"
+          ls -la release-assets/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*.ipk
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            OpenWrt packages for **${{ github.ref_name }}**.
+
+            Both packages are `PKGARCH:=all` — the same `.ipk` works on every OpenWrt target (built on 24.10, runs on 23.05 / 24.10 / 25.x).
+
+            ### Install on the router
+
+            ```sh
+            V=${{ steps.ver.outputs.version }}
+            cd /tmp
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/wan-mac-autoclone_${V}-1_all.ipk
+            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/luci-app-wan-mac-autoclone_${V}-1_all.ipk
+            opkg install ./wan-mac-autoclone_*.ipk ./luci-app-wan-mac-autoclone_*.ipk
+            /etc/init.d/rpcd reload
+            ```
